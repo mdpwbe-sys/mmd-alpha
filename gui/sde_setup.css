@@ -1,0 +1,15 @@
+.sde-setup {
+  width: min(560px, calc(100vw - 64px));
+  padding: 32px;
+  border: 1px solid #24424f;
+  border-radius: 16px;
+  background: #0d1a24;
+  color: #e1edf2;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+.sde-setup::backdrop { background: rgb(0 0 0 / 80%); }
+.sde-setup h2 { margin: 0 0 16px; }
+.sde-setup p { color: #c3d2dc; overflow-wrap: anywhere; }
+.sde-setup progress { width: 100%; accent-color: #27ced7; }
+.sde-setup button { background: #27ced7; color: #06171d; padding: 12px 20px; border: 0; border-radius: 8px; cursor: pointer; }
+.sde-setup button:focus-visible { outline: 2px solid white; outline-offset: 4px; }

@@ -1,0 +1,21 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const source = fs.readFileSync(__dirname + '/trading-ui.js', 'utf8');
+test('station groups expose a selectable parent and preserve the selected source', () => {
+  const element = tag => ({tag, children: [], appendChild(child) {this.children.push(child);}});
+  const ctx = {document: {createElement: element}, T: {containerKey: ''}};
+  vm.createContext(ctx);
+  vm.runInContext(source.slice(source.indexOf('  function selectedKey('), source.indexOf('  function hydrateContainerFilter(')), ctx);
+  const station = {key: 'char:1:station:6001', character_id: '1', item_id: '6001', root_location_id: '6001', kind: 'station', station_name: 'Station A', path: ['Pilot A', 'Station A']};
+  const box = {...station, key: 'char:1:container:10', item_id: '10', kind: 'container', name: 'Box', depth: 1};
+  const select = element('select');
+  ctx.fillContainerSelect(select, {containers: [station, box], asset_source: station});
+  assert.equal(select.value, station.key);
+  assert.equal(select.children[1].tag, 'optgroup');
+  assert.equal(select.children[1].label, 'Pilot A · Station A');
+  assert.equal(select.children[1].children[0].value, station.key);
+  assert.match(select.children[1].children[0].textContent, /Toute la station/);
+  assert.equal(select.children[1].children[1].value, box.key);
+});

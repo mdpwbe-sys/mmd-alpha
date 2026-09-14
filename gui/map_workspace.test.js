@@ -1,0 +1,54 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const test = require('node:test');
+
+test('New Eden header keeps a compact one-line filter bar and icon actions', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  for (const id of ['eve-map-gates', 'eve-map-traffic', 'eve-map-danger', 'eve-map-sovereignty', 'eve-map-empires']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /id="eve-map-hotspots"/);
+  assert.match(html, /id="eve-map-intel-label-metric"/);
+  for (const metric of ['traffic', 'npc', 'kills', 'danger', 'combat']) assert.match(html, new RegExp(`<option value="${metric}">`));
+  assert.doesNotMatch(html, /eve-map-filter-title|eve-map-my-pilots|eve-map-esi-status|eve-map-r2z2-status|eve-map-pilots-status/);
+  assert.ok(html.indexOf('id="eve-map-panel-toggle"') > html.indexOf('class="eve-map-toolbar"'));
+  assert.doesNotMatch(html.slice(html.indexOf('class="eve-map-header"'), html.indexOf('class="eve-map-toolbar"')), /eve-map-panel-toggle/);
+  assert.doesNotMatch(html, /id="eve-map-fit"/, 'le niveau Région du slider remplace le bouton Home / reset caméra redondant');
+  assert.match(html, /System: zoom in.*Constellation: refine view.*Region: reset camera/, 'le hover du slider explique chaque position de zoom');
+  assert.match(html, /id="eve-map-panel-toggle"[^>]*>▣<\/button>/);
+  assert.match(html, /id="eve-map-fullscreen"[^>]*>⛶<\/button>/);
+});
+
+test('New Eden tab lazy-loads map renderer and leaves trading hidden', async () => {
+  const nodes = new Map(['eve-map-workspace', 'orders-metrics', 'orders-grid', 'trade-view', 'eve-map-canvas'].map(id => [id, { id, hidden: false, innerHTML: '' }]));
+  const scripts = [], tabs = [{ dataset: { workspace: 'map' }, classList: { toggle() {} } }];
+  let opened = 0;
+  const window = { __state: {} };
+  const document = {
+    getElementById(id) { return nodes.get(id); },
+    querySelectorAll() { return tabs; },
+    createElement() { return {}; },
+    head: { appendChild(script) { scripts.push(script.src); if (script.src === 'eve_map.js') window.openEveMap = async () => { opened += 1; }; script.onload(); } },
+  };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'map-workspace.js'), 'utf8'), vm.createContext({ window, document, Promise, Error, String }));
+  assert.equal(scripts.length, 0, 'aucun renderer avant le clic');
+  assert.equal(await window.MapWorkspace.show(), true);
+  assert.deepEqual(scripts, ['vendor/3d-force-graph.min.js', 'eve_gate_traffic.js', 'eve_map_styles.js', 'eve_map_tactical.js', 'eve_jump_overlay.js', 'eve_jump_planner.js', 'eve_map.js']);
+  assert.equal(nodes.get('eve-map-workspace').hidden, false);
+  assert.equal(nodes.get('orders-grid').hidden, true);
+  assert.equal(opened, 1);
+  let focusedCharacter = null;
+  window.focusEveMapCharacter = async id => { focusedCharacter = id; return true; };
+  assert.equal(await window.MapWorkspace.focusCharacter(42), true);
+  assert.equal(focusedCharacter, 42, 'le pont de workspace transmet le clic d’une puce personnage au renderer actif');
+  let focusedSystem = null;
+  window.focusEveMapSystem = id => { focusedSystem = id; };
+  assert.equal(await window.MapWorkspace.focusSystem(30000142), true);
+  assert.equal(focusedSystem, 30000142, 'le journal peut ouvrir puis centrer la carte sur le système d’un kill');
+  let clearedCharacterFocus = 0;
+  window.clearEveMapCharacterSelection = () => { clearedCharacterFocus += 1; };
+  assert.equal(window.MapWorkspace.clearCharacterFocus(), true);
+  assert.equal(clearedCharacterFocus, 1, 'le pont de workspace annule aussi le filtre de marqueur quand Tous les pilotes est choisi');
+  nodes.get('eve-map-workspace').hidden = true;
+  assert.equal(await window.MapWorkspace.focusCharacter(42), false, 'un clic personnage hors carte ne charge ni ne déplace la carte');
+});

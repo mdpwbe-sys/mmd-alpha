@@ -1,0 +1,5 @@
+pywebview==6.2.1
+cryptography==50.0.1
+psutil==7.2.2
+PyJWT[crypto]==2.14.0
+pywin32==312; sys_platform == 'win32'
