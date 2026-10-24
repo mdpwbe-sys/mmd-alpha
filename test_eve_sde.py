@@ -148,6 +148,69 @@ class SdeTests(unittest.TestCase):
         (self.root/'current.json').write_text('{"schema":1,"generation":"../outside"}')
         self.assertIsNone(sde._generation(str(self.root)))
 
+    def test_each_launch_checks_manifest_when_ready(self):
+        worker = self.install()
+        count = len(self.requests)
+        state = worker.maybe_check_update()
+        self.assertEqual(state['phase'], 'checking')
+        worker._thread.join(5)
+        self.assertEqual(worker.status()['phase'], 'ready')
+        self.assertEqual(self.requests[count:], [sde.MANIFEST_URL])
+
+    def test_launch_check_proposes_download_when_build_differs(self):
+        self.install()
+        worker = sde.SdeInstaller(self.root, self.opener)
+        self.requests.clear()
+        def newer(request, timeout):
+            self.requests.append(request.full_url)
+            if request.full_url == sde.MANIFEST_URL:
+                return Response(b'{"_key":"sde","buildNumber":99}')
+            raise AssertionError('update check must not download the archive')
+        worker.opener = newer
+        state = worker.maybe_check_update()
+        self.assertEqual(state['phase'], 'checking')
+        worker._thread.join(5)
+        state = worker.status()
+        self.assertEqual(state['phase'], 'update_available')
+        self.assertEqual(state['local_build'], 42)
+        self.assertEqual(state['remote_build'], 99)
+        self.assertEqual(self.requests, [sde.MANIFEST_URL])
+        self.assertEqual(worker.defer_update()['phase'], 'ready')
+        self.assertEqual(worker.start()['phase'], 'ready')
+
+    def test_update_available_start_downloads_new_build(self):
+        self.install()
+        worker = sde.SdeInstaller(self.root, self.opener)
+        def newer(request, timeout):
+            self.requests.append(request.full_url)
+            if request.full_url == sde.MANIFEST_URL:
+                return Response(b'{"_key":"sde","buildNumber":99}')
+            self.assertIn('-99-jsonl.zip', request.full_url)
+            return Response(self.data)
+        worker.opener = newer
+        worker.maybe_check_update()
+        worker._thread.join(5)
+        self.assertEqual(worker.status()['phase'], 'update_available')
+        worker.start()
+        worker._thread.join(5)
+        self.assertEqual(worker.status()['phase'], 'ready')
+        self.assertEqual(worker.status()['build'], 99)
+        self.assertEqual(json.loads((self.root / 'current.json').read_text())['build'], 99)
+
+    def test_failed_check_alerts_and_can_continue(self):
+        self.install()
+        worker = sde.SdeInstaller(
+            self.root,
+            opener=lambda *a, **k: (_ for _ in ()).throw(OSError('offline')),
+        )
+        worker.maybe_check_update()
+        worker._thread.join(5)
+        state = worker.status()
+        self.assertEqual(state['phase'], 'check_error')
+        self.assertIn('offline', state['message'])
+        self.assertEqual(worker.defer_update()['phase'], 'ready')
+        self.assertEqual(worker.status()['build'], 42)
+
 
 if __name__ == '__main__':
     unittest.main()

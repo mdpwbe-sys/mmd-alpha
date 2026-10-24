@@ -268,22 +268,38 @@ def _latest_my_orders_file():
 
 
 class Api:
+    def _activate_sde_caches(self, status):
+        """Drop lookups that may still point at a previous SDE generation."""
+        build = status.get('build')
+        if status.get('phase') != 'ready' or not status.get('counts'):
+            return
+        if getattr(self, '_sde_activated', False) and getattr(self, '_sde_build', None) == build:
+            return
+        import mmd_stations
+        mmd_stations._sys_cache.clear()
+        mmd_stations._region_cache.clear()
+        mmd_stations._jumps = None
+        mmd_stations._ENV_STATIONS = None
+        self._sde_activated = True
+        self._sde_build = build
+
     def sde_setup_status(self):
         from eve_sde import installer
         status = installer().status()
-        if status['phase'] == 'ready' and status.get('counts') and not getattr(self, '_sde_activated', False):
-            # Discard lookups made before the first-run installation completed.
-            import mmd_stations
-            mmd_stations._sys_cache.clear()
-            mmd_stations._region_cache.clear()
-            mmd_stations._jumps = None
-            mmd_stations._ENV_STATIONS = None
-            self._sde_activated = True
+        self._activate_sde_caches(status)
         return status
 
     def sde_setup_start(self):
         from eve_sde import installer
         return installer().start()
+
+    def sde_update_check(self):
+        from eve_sde import installer
+        return installer().maybe_check_update()
+
+    def sde_update_defer(self):
+        from eve_sde import installer
+        return installer().defer_update()
 
     def _combat_ship_name(self, ship_type_id):
         if not ship_type_id:

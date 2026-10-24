@@ -2,6 +2,10 @@
 
 Only a complete generation is published. No archive members are extracted.
 Download/conversion runs on one background worker; callers only start/poll.
+
+When a generation is already ready, each launch fetches the official CCP
+manifest. A newer build only proposes an update; download is explicit. A
+failed check surfaces as check_error for the UI to alert.
 """
 from contextlib import closing
 from decimal import Decimal
@@ -164,13 +168,30 @@ def convert_archive(archive, destination, progress=lambda **state: None):
         return {'types':len(types),'systems':counts['systems'],'gates':counts['gates'],'stations':len(station_rows)}
 
 
+def _pointer_info(root):
+    try:
+        info = json.loads((Path(root) / 'current.json').read_text(encoding='utf-8'))
+        build = info.get('build')
+        if type(build) is not int or build <= 0:
+            return None
+        if _generation(str(root)) is None:
+            return None
+        return info
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 class SdeInstaller:
     def __init__(self, root=None, opener=urllib.request.urlopen, converter=convert_archive):
         self.root = Path(root) if root is not None else cache_root()
         self.opener, self.converter = opener, converter
         self._lock = threading.RLock()
         self._thread = None
-        self._state = {'phase':'ready' if _generation(str(self.root)) else 'missing', 'percent':0}
+        local = _pointer_info(self.root)
+        if local:
+            self._state = {'phase': 'ready', 'percent': 100, 'build': local['build']}
+        else:
+            self._state = {'phase': 'missing', 'percent': 0}
 
     def status(self):
         with self._lock:
@@ -182,27 +203,74 @@ class SdeInstaller:
 
     def start(self):
         with self._lock:
-            if self._state['phase'] == 'ready' or self._thread and self._thread.is_alive():
+            phase = self._state['phase']
+            if self._thread and self._thread.is_alive():
+                return dict(self._state)
+            if phase == 'ready':
+                return dict(self._state)
+            if phase not in ('missing', 'error', 'update_available'):
                 return dict(self._state)
             self._state = {'phase':'downloading','percent':0,'message':'Looking up official CCP SDE'}
             self._thread = threading.Thread(target=self._run, name='mmd-sde-install', daemon=True)
             self._thread.start()
             return dict(self._state)
 
+    def maybe_check_update(self):
+        """Each launch: fetch CCP build; never auto-download."""
+        with self._lock:
+            if self._state['phase'] not in ('ready', 'check_error'):
+                return dict(self._state)
+            if self._thread and self._thread.is_alive():
+                return dict(self._state)
+            build = self._state.get('build')
+            self._state = {'phase': 'checking', 'percent': 0, 'build': build,
+                           'message': 'Checking for EVE data updates'}
+            self._thread = threading.Thread(target=self._check_run, name='mmd-sde-check', daemon=True)
+            self._thread.start()
+            return dict(self._state)
+
+    def defer_update(self):
+        with self._lock:
+            if self._state['phase'] in ('update_available', 'check_error'):
+                build = self._state.get('local_build') or self._state.get('build')
+                self._state = {'phase': 'ready', 'percent': 100,
+                               'message': 'Local EVE data ready', 'build': build}
+            return dict(self._state)
+
     def _open(self, url):
         return self.opener(urllib.request.Request(url,headers={'User-Agent':'MMD-Trader/0.1 SDE Bootstrap'}), timeout=30)
+
+    def _remote_build(self):
+        with self._open(MANIFEST_URL) as response:
+            lines = response.read(65537)
+            if len(lines) > 65536:
+                raise ValueError('Invalid SDE manifest size')
+            entries = [json.loads(line) for line in lines.splitlines() if line.strip()]
+            build = next(r['buildNumber'] for r in entries if r.get('_key') == 'sde')
+            if type(build) is not int or build <= 0:
+                raise ValueError('Invalid SDE build number')
+            return build
+
+    def _check_run(self):
+        local = _pointer_info(self.root)
+        local_build = local['build'] if local else None
+        try:
+            remote = self._remote_build()
+            if local_build is not None and remote != local_build:
+                self._update(phase='update_available', percent=0, build=local_build,
+                             local_build=local_build, remote_build=remote,
+                             message=f'EVE static data build {remote} available (installed: {local_build})')
+            else:
+                self._update(phase='ready', percent=100, build=local_build,
+                             message='Local EVE data ready')
+        except Exception as error:
+            self._update(phase='check_error', percent=0, build=local_build,
+                         message=f'Could not check for EVE data updates: {error}')
 
     def _run(self):
         try:
             self.root.mkdir(parents=True, exist_ok=True)
-            with self._open(MANIFEST_URL) as response:
-                lines = response.read(65537)
-                if len(lines) > 65536:
-                    raise ValueError('Invalid SDE manifest size')
-                entries = [json.loads(line) for line in lines.splitlines() if line.strip()]
-                build = next(r['buildNumber'] for r in entries if r.get('_key') == 'sde')
-                if type(build) is not int or build <= 0:
-                    raise ValueError('Invalid SDE build number')
+            build = self._remote_build()
             url = f'https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip'
             # Own temporary directory only: failed/partial downloads never become active.
             with tempfile.TemporaryDirectory(prefix='install-',dir=self.root) as temp:
@@ -236,7 +304,8 @@ class SdeInstaller:
                 pointer.write_text(json.dumps(info),encoding='utf-8')
                 os.replace(pointer,self.root / 'current.json')
             _generation.cache_clear()
-            self._update(phase='ready',percent=100,message='Local EVE data ready',counts=counts)
+            self._update(phase='ready',percent=100,message='Local EVE data ready',
+                         counts=counts,build=build)
         except Exception as error:
             self._update(phase='error',message=f'SDE setup failed: {error}')
 

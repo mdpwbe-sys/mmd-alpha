@@ -11,5 +11,25 @@
 .sde-setup h2 { margin: 0 0 16px; }
 .sde-setup p { color: #c3d2dc; overflow-wrap: anywhere; }
 .sde-setup progress { width: 100%; accent-color: #27ced7; }
-.sde-setup button { background: #27ced7; color: #06171d; padding: 12px 20px; border: 0; border-radius: 8px; cursor: pointer; }
+.sde-setup button {
+  background: #27ced7;
+  color: #06171d;
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.sde-setup button.sde-secondary {
+  background: transparent;
+  color: #e1edf2;
+  border: 1px solid #24424f;
+}
 .sde-setup button:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+.sde-setup .sde-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
